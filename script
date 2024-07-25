@@ -1,0 +1,54 @@
+import boto3
+import torch
+import pandas as pd
+import os
+from datetime import datetime
+
+# Initialize S3 client
+s3_client = boto3.client('s3')
+
+# Load your PyTorch model
+model = torch.load('path_to_your_model.pth')
+model.eval()
+
+def download_file_from_s3(bucket_name, s3_key, local_path):
+    s3_client.download_file(bucket_name, s3_key, local_path)
+
+def upload_file_to_s3(local_path, bucket_name, s3_key):
+    s3_client.upload_file(local_path, bucket_name, s3_key)
+
+def generate_predictions(file_path):
+    # Load your data
+    data = pd.read_csv(file_path)
+    # Assume data needs to be converted to tensor for model input
+    inputs = torch.tensor(data.values, dtype=torch.float32)
+    # Generate predictions
+    with torch.no_grad():
+        predictions = model(inputs)
+    return predictions
+
+def main():
+    bucket_name = 'your-s3-bucket'
+    input_s3_key = 'path/to/input/file.csv'
+    local_input_path = '/tmp/input_file.csv'
+    local_output_path = '/tmp/predictions.csv'
+    output_s3_key = 'path/to/output/predictions.csv'
+
+    # Download file from S3
+    download_file_from_s3(bucket_name, input_s3_key, local_input_path)
+
+    # Generate predictions
+    predictions = generate_predictions(local_input_path)
+
+    # Save predictions to CSV
+    predictions_df = pd.DataFrame(predictions.numpy(), columns=['Prediction'])
+    if os.path.exists(local_output_path):
+        predictions_df.to_csv(local_output_path, mode='a', header=False, index=False)
+    else:
+        predictions_df.to_csv(local_output_path, index=False)
+
+    # Upload predictions to S3
+    upload_file_to_s3(local_output_path, bucket_name, output_s3_key)
+
+if __name__ == '__main__':
+    main()
