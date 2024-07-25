@@ -26,6 +26,15 @@ def download_file_from_s3(bucket_name, s3_key, local_path):
 def upload_file_to_s3(local_path, bucket_name, s3_key):
     s3_client.upload_file(local_path, bucket_name, s3_key)
 
+def get_latest_file_from_s3(bucket_name, prefix):
+    response = s3_client.list_objects_v2(Bucket=bucket_name, Prefix=prefix)
+    if 'Contents' not in response:
+        raise ValueError("No files found in the bucket.")
+    
+    files = response['Contents']
+    latest_file = max(files, key=lambda x: x['LastModified'])
+    return latest_file['Key']
+
 def generate_predictions(images, model, device):
     images = images.float().to(device)
     with torch.no_grad():
@@ -51,7 +60,7 @@ if __name__ == '__main__':
     parser.add_argument('--model_path',     type=str, default=None, help='The path to a saved model to use.')
     parser.add_argument('--image_path',     type=str, default=None, help='The path to an image or folder of images')
     parser.add_argument('--bucket_name',    type=str, default=None, help='The S3 bucket name.')
-    parser.add_argument('--input_s3_key',   type=str, default=None, help='The S3 key for the input image.')
+    parser.add_argument('--input_s3_prefix', type=str, default=None, help='The S3 prefix for the input images.')
     parser.add_argument('--output_s3_key',  type=str, default=None, help='The S3 key for the output CSV.')
     args = parser.parse_args()
 
@@ -60,27 +69,20 @@ if __name__ == '__main__':
     model_path = args.model_path
     image_path = args.image_path
     bucket_name = args.bucket_name
-    input_s3_key = args.input_s3_key
+    input_s3_prefix = args.input_s3_prefix
     output_s3_key = args.output_s3_key
 
     torch.backends.cudnn.benchmark = True
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     model = EfficientNet(device, model_path, param_freeze_ratio=0.66)
 
-    # Download the image from S3
+    # Get the latest file from S3
+    latest_file_key = get_latest_file_from_s3(bucket_name, input_s3_prefix)
     local_image_path = '/tmp/input_image.jpg'
-    download_file_from_s3(bucket_name, input_s3_key, local_image_path)
+    download_file_from_s3(bucket_name, latest_file_key, local_image_path)
 
-    # Check if image_path is a directory or a single image
-    if os.path.isdir(image_path):
-        # Get all image files in the directory
-        image_files = []
-        for file in os.listdir(image_path):
-            if file.endswith(".jpg") or file.endswith(".png"):
-                image_files.append(os.path.join(image_path, file))
-    else:
-        # Use the single image
-        image_files = [image_path]
+    # Use the downloaded image
+    image_files = [local_image_path]
 
     dataset_params = {
         'model_config': timm.data.resolve_model_data_config(model),
@@ -110,32 +112,3 @@ if __name__ == '__main__':
 
     # Upload the predictions CSV back to S3
     upload_file_to_s3(local_output_path, bucket_name, output_s3_key)
-
-
-
-
-
-
-#!/bin/bash
-# Activate the virtual environment
-source /path/to/your/venv/bin/activate
-
-# Run the Python script
-python /path/to/your/script.py --input_img_size 800 --batch_size 1 --model_path path_to_your_model.pth --image_path /tmp/input_image.jpg --bucket_name your-s3-bucket --input_s3_key path/to/input/image.jpg --output_s3_key path/to/output/predictions.csv
-
-
-
-
-
-chmod +x /path/to/run_inference.sh
-
-
-
-
-crontab -e
-
-
-*/6 * * * * /path/to/run_inference.sh
-
-
-/path/to/run_inference.sh
