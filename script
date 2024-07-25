@@ -1,14 +1,24 @@
-import boto3
-import torch
+import argparse
+import pickle
+from statistics import median
+import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
+from tqdm import tqdm
+from sortedcontainers import SortedList
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader
+from torchvision.utils import save_image
+import timm
+from Datasets import Dataset
+from EfficientNet_model import EfficientNet
 import os
+import boto3
 
 # Initialize S3 client
 s3_client = boto3.client('s3')
-
-# Load your PyTorch model
-model = torch.load('path_to_your_model.pth')
-model.eval()
 
 def download_file_from_s3(bucket_name, s3_key, local_path):
     s3_client.download_file(bucket_name, s3_key, local_path)
@@ -16,19 +26,16 @@ def download_file_from_s3(bucket_name, s3_key, local_path):
 def upload_file_to_s3(local_path, bucket_name, s3_key):
     s3_client.upload_file(local_path, bucket_name, s3_key)
 
-def generate_predictions(file_path):
-    # Load your data
-    data = pd.read_csv(file_path)
-    # Assume data needs to be converted to tensor for model input
-    inputs = torch.tensor(data.values, dtype=torch.float32)
-    # Generate predictions
+def generate_predictions(images, model, device):
+    images = images.float().to(device)
     with torch.no_grad():
-        predictions = model(inputs)
-    return predictions
+        outputs = model(images).clone().detach().cpu()
+    return outputs
 
-def append_predictions_to_csv(predictions, local_output_path):
+def append_predictions_to_csv(predictions, filepaths, local_output_path):
     # Convert predictions to DataFrame
     predictions_df = pd.DataFrame(predictions.numpy(), columns=['Prediction'])
+    predictions_df['Filepath'] = filepaths
     if os.path.exists(local_output_path):
         existing_df = pd.read_csv(local_output_path)
         combined_df = pd.concat([existing_df, predictions_df], ignore_index=True)
@@ -36,24 +43,99 @@ def append_predictions_to_csv(predictions, local_output_path):
         combined_df = predictions_df
     combined_df.to_csv(local_output_path, index=False)
 
-def main():
-    bucket_name = 'your-s3-bucket'
-    input_s3_key = 'path/to/input/file.csv'
-    local_input_path = '/tmp/input_file.csv'
-    local_output_path = '/tmp/predictions.csv'
-    output_s3_key = 'path/to/output/predictions.csv'
+if __name__ == '__main__':
+    # Argparsing
+    parser = argparse.ArgumentParser(description='Train a model.')
+    parser.add_argument('--input_img_size', type=int, default=800,  help='The input image size.')
+    parser.add_argument('--batch_size',     type=int, default=1,    help='The batch size of input images.')
+    parser.add_argument('--model_path',     type=str, default=None, help='The path to a saved model to use.')
+    parser.add_argument('--image_path',     type=str, default=None, help='The path to an image or folder of images')
+    parser.add_argument('--bucket_name',    type=str, default=None, help='The S3 bucket name.')
+    parser.add_argument('--input_s3_key',   type=str, default=None, help='The S3 key for the input image.')
+    parser.add_argument('--output_s3_key',  type=str, default=None, help='The S3 key for the output CSV.')
+    args = parser.parse_args()
 
-    # Download file from S3
-    download_file_from_s3(bucket_name, input_s3_key, local_input_path)
+    input_img_size = args.input_img_size
+    batch_size = args.batch_size
+    model_path = args.model_path
+    image_path = args.image_path
+    bucket_name = args.bucket_name
+    input_s3_key = args.input_s3_key
+    output_s3_key = args.output_s3_key
 
-    # Generate predictions
-    predictions = generate_predictions(local_input_path)
+    torch.backends.cudnn.benchmark = True
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    model = EfficientNet(device, model_path, param_freeze_ratio=0.66)
+
+    # Download the image from S3
+    local_image_path = '/tmp/input_image.jpg'
+    download_file_from_s3(bucket_name, input_s3_key, local_image_path)
+
+    # Check if image_path is a directory or a single image
+    if os.path.isdir(image_path):
+        # Get all image files in the directory
+        image_files = []
+        for file in os.listdir(image_path):
+            if file.endswith(".jpg") or file.endswith(".png"):
+                image_files.append(os.path.join(image_path, file))
+    else:
+        # Use the single image
+        image_files = [image_path]
+
+    dataset_params = {
+        'model_config': timm.data.resolve_model_data_config(model),
+        'input_img_size': input_img_size,
+        # 'ROI': ((1046,569),(1920,1440))  # RayRobertsLake
+        'ROI': ((1067,417),(2393,1743))  # Pinewood
+    }
+    inference_dataset = Dataset(image_files, **dataset_params, scaler=model.scaler, training=False)
+    dataloader = DataLoader(inference_dataset, batch_size=batch_size, shuffle=False, pin_memory=True)
+
+    model.eval()
+    predictions = []
+    filepaths = []
+    for i, (images, _) in tqdm(enumerate(dataloader), total=len(dataloader)):
+        outputs = generate_predictions(images, model, device)
+        outputs = inference_dataset.reverse_scale(outputs)
+
+        # Store predictions and filepaths
+        predictions.extend(outputs)
+        filepaths.extend(inference_dataset.image_paths[i*batch_size:(i+1)*batch_size])
+
+    # Local path to save the predictions CSV
+    local_output_path = '/tmp/inference_predictions.csv'
 
     # Append predictions to CSV
-    append_predictions_to_csv(predictions, local_output_path)
+    append_predictions_to_csv(predictions, filepaths, local_output_path)
 
-    # Upload predictions to S3
+    # Upload the predictions CSV back to S3
     upload_file_to_s3(local_output_path, bucket_name, output_s3_key)
 
-if __name__ == '__main__':
-    main()
+
+
+
+
+
+#!/bin/bash
+# Activate the virtual environment
+source /path/to/your/venv/bin/activate
+
+# Run the Python script
+python /path/to/your/script.py --input_img_size 800 --batch_size 1 --model_path path_to_your_model.pth --image_path /tmp/input_image.jpg --bucket_name your-s3-bucket --input_s3_key path/to/input/image.jpg --output_s3_key path/to/output/predictions.csv
+
+
+
+
+
+chmod +x /path/to/run_inference.sh
+
+
+
+
+crontab -e
+
+
+*/6 * * * * /path/to/run_inference.sh
+
+
+/path/to/run_inference.sh
