@@ -2,7 +2,6 @@ import boto3
 import torch
 import pandas as pd
 import os
-from datetime import datetime
 
 # Initialize S3 client
 s3_client = boto3.client('s3')
@@ -27,6 +26,16 @@ def generate_predictions(file_path):
         predictions = model(inputs)
     return predictions
 
+def append_predictions_to_csv(predictions, local_output_path):
+    # Convert predictions to DataFrame
+    predictions_df = pd.DataFrame(predictions.numpy(), columns=['Prediction'])
+    if os.path.exists(local_output_path):
+        existing_df = pd.read_csv(local_output_path)
+        combined_df = pd.concat([existing_df, predictions_df], ignore_index=True)
+    else:
+        combined_df = predictions_df
+    combined_df.to_csv(local_output_path, index=False)
+
 def main():
     bucket_name = 'your-s3-bucket'
     input_s3_key = 'path/to/input/file.csv'
@@ -40,12 +49,8 @@ def main():
     # Generate predictions
     predictions = generate_predictions(local_input_path)
 
-    # Save predictions to CSV
-    predictions_df = pd.DataFrame(predictions.numpy(), columns=['Prediction'])
-    if os.path.exists(local_output_path):
-        predictions_df.to_csv(local_output_path, mode='a', header=False, index=False)
-    else:
-        predictions_df.to_csv(local_output_path, index=False)
+    # Append predictions to CSV
+    append_predictions_to_csv(predictions, local_output_path)
 
     # Upload predictions to S3
     upload_file_to_s3(local_output_path, bucket_name, output_s3_key)
