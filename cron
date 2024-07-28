@@ -1,0 +1,1 @@
+*/6 * * * * /path/to/your/script/run_script.sh >> /path/to/your/script/cron.log 2>&1
