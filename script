@@ -1,5 +1,4 @@
 import os
-import pytz
 import boto3
 from datetime import datetime
 import argparse
@@ -22,15 +21,13 @@ def ensure_directory_exists(directory):
     else:
         print(f"Directory already exists: {directory}")
 
-def download_file_from_s3(bucket_name, s3_key, local_dir):
-    # Get current time in EST
-    est = pytz.timezone('US/Eastern')
-    current_time = datetime.now(est)
-    formatted_time = current_time.strftime('%Y-%m-%d_%H-%M-%S')
+def download_file_from_s3(bucket_name, s3_key, local_dir, last_modified):
+    # Format the LastModified time for the filename
+    formatted_time = last_modified.strftime('%Y-%m-%d_%H-%M-%S')
     
-    # Construct the new filename with current EST time
+    # Construct the new filename with LastModified time
     base_filename = os.path.basename(s3_key)
-    new_filename = f"{formatted_time}_{base_filename}"
+    new_filename = f"{base_filename}_{formatted_time}"
     local_file_path = os.path.join(local_dir, new_filename)
     
     ensure_directory_exists(local_dir)
@@ -50,7 +47,7 @@ def get_latest_file_from_s3(bucket_name, prefix):
     # Sort files by LastModified date in descending order
     latest_file = max(files, key=lambda x: x['LastModified'])
     print(f"Latest file in S3: {latest_file['Key']}, LastModified: {latest_file['LastModified']}")
-    return latest_file['Key']
+    return latest_file['Key'], latest_file['LastModified']
 
 def generate_predictions(images, model, device):
     images = images.float().to(device)
@@ -113,8 +110,8 @@ if __name__ == '__main__':
     model = EfficientNet(device, model_path, param_freeze_ratio=0.66)
 
     # Get the latest file from S3
-    latest_file_key = get_latest_file_from_s3(bucket_name, input_s3_prefix)
-    local_image_path = download_file_from_s3(bucket_name, latest_file_key, local_dir)
+    latest_file_key, last_modified = get_latest_file_from_s3(bucket_name, input_s3_prefix)
+    local_image_path = download_file_from_s3(bucket_name, latest_file_key, local_dir, last_modified)
 
     # Verify the downloaded file
     check_file_integrity(local_image_path)
