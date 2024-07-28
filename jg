@@ -31,13 +31,16 @@ def download_file_from_s3(bucket_name, s3_key, local_dir):
 def get_latest_file_from_s3(bucket_name, prefix):
     print(f"Listing objects in S3: Bucket={bucket_name}, Prefix={prefix}")
     response = s3_client.list_objects_v2(Bucket=bucket_name, Prefix=prefix)
+    
     if 'Contents' not in response:
         raise ValueError("No files found in the bucket.")
     
     files = response['Contents']
+    # Sort files by LastModified date in descending order
     latest_file = max(files, key=lambda x: x['LastModified'])
-    print(f"Latest file in S3: {latest_file['Key']}")
+    print(f"Latest file in S3: {latest_file['Key']}, LastModified: {latest_file['LastModified']}")
     return latest_file['Key']
+
 
 def generate_predictions(images, model, device):
     images = images.float().to(device)
