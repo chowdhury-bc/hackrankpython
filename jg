@@ -1,5 +1,13 @@
 import os
 import boto3
+import argparse
+import torch
+import pandas as pd
+from torch.utils.data import DataLoader
+from tqdm import tqdm
+import timm
+from Datasets import Dataset
+from EfficientNet_model import EfficientNet
 
 # Initialize S3 client
 s3_client = boto3.client('s3')
@@ -31,62 +39,101 @@ def get_latest_file_from_s3(bucket_name, prefix):
     print(f"Latest file in S3: {latest_file['Key']}")
     return latest_file['Key']
 
-# Example usage
-if __name__ == '__main__':
-    import argparse
+def generate_predictions(images, model, device):
+    images = images.float().to(device)
+    with torch.no_grad():
+        outputs = model(images).clone().detach().cpu()
+    return outputs
 
+def append_predictions_to_csv(predictions, filepaths, local_output_path):
+    # Convert predictions to DataFrame
+    predictions_df = pd.DataFrame(predictions.numpy(), columns=['Prediction'])
+    predictions_df['Filepath'] = filepaths
+    if os.path.exists(local_output_path):
+        existing_df = pd.read_csv(local_output_path)
+        combined_df = pd.concat([existing_df, predictions_df], ignore_index=True)
+    else:
+        combined_df = predictions_df
+    combined_df.to_csv(local_output_path, index=False)
+    print(f"Appended predictions to CSV at {local_output_path}")
+
+def check_file_integrity(file_path):
+    try:
+        file_size = os.path.getsize(file_path)
+        print(f"File size: {file_size} bytes")
+        if file_size == 0:
+            raise ValueError("Downloaded file is empty.")
+    except Exception as e:
+        print(f"Error checking file integrity: {e}")
+        raise
+
+if __name__ == '__main__':
     # Argparsing
-    parser = argparse.ArgumentParser(description='Download latest file from S3.')
-    parser.add_argument('--bucket_name', type=str, required=True, help='The S3 bucket name.')
+    parser = argparse.ArgumentParser(description='Train a model.')
+    parser.add_argument('--input_img_size', type=int, default=800,  help='The input image size.')
+    parser.add_argument('--batch_size',     type=int, default=1,    help='The batch size of input images.')
+    parser.add_argument('--model_path',     type=str, default=None, help='The path to a saved model to use.')
+    parser.add_argument('--image_path',     type=str, default=None, help='The path to an image or folder of images')
+    parser.add_argument('--bucket_name',    type=str, required=True, help='The S3 bucket name.')
     parser.add_argument('--input_s3_prefix', type=str, required=True, help='The S3 prefix for the input images.')
     parser.add_argument('--local_dir', type=str, required=True, help='The local directory to save the downloaded image.')
+    parser.add_argument('--output_s3_key',  type=str, default=None, help='The S3 key for the output CSV.')
     args = parser.parse_args()
 
+    input_img_size = args.input_img_size
+    batch_size = args.batch_size
+    model_path = args.model_path
+    image_path = args.image_path
     bucket_name = args.bucket_name
-    prefix = args.input_s3_prefix
+    input_s3_prefix = args.input_s3_prefix
     local_dir = args.local_dir
+    output_s3_key = args.output_s3_key
 
-    latest_file_key = get_latest_file_from_s3(bucket_name, prefix)
+    torch.backends.cudnn.benchmark = True
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    model = EfficientNet(device, model_path, param_freeze_ratio=0.66)
+
+    # Get the latest file from S3
+    latest_file_key = get_latest_file_from_s3(bucket_name, input_s3_prefix)
     local_image_path = download_file_from_s3(bucket_name, latest_file_key, local_dir)
-    print(f"File downloaded to: {local_image_path}")
 
+    # Verify the downloaded file
+    check_file_integrity(local_image_path)
 
+    # Use the downloaded image
+    image_files = [local_image_path]
 
+    dataset_params = {
+        'model_config': timm.data.resolve_model_data_config(model),
+        'input_img_size': input_img_size,
+        'ROI': ((1067,417),(2393,1743))  # Example ROI
+    }
 
+    try:
+        inference_dataset = Dataset(image_files, **dataset_params, scaler=model.scaler, training=False)
+        dataloader = DataLoader(inference_dataset, batch_size=batch_size, shuffle=False, pin_memory=True)
 
+        model.eval()
+        predictions = []
+        filepaths = []
+        for i, (images, _) in tqdm(enumerate(dataloader), total=len(dataloader)):
+            print(f"Processing batch {i+1}/{len(dataloader)}")
+            outputs = generate_predictions(images, model, device)
+            if inference_dataset.scaler:
+                outputs = inference_dataset.reverse_scale(outputs)
+            else:
+                print("Scaler is None, skipping inverse transformation")
 
-#!/bin/bash
+            predictions.extend(outputs)
+            filepaths.extend(inference_dataset.image_paths[i*batch_size:(i+1)*batch_size])
 
-# Directory to check for files
-DIRECTORY="/var/snap/amazon-ssm-agent/7993/imgfiles"
+        # Local path to save the predictions CSV
+        local_output_path = '/tmp/inference_predictions.csv'
 
-# Check if any file exists in the directory
-if [ "$(ls -A $DIRECTORY)" ]; then
-  echo "Files found in $DIRECTORY. They will be deleted after running the script."
-  FILE_EXISTS=true
-else
-  echo "No files found in $DIRECTORY."
-  FILE_EXISTS=false
-fi
+        # Append predictions to CSV
+        append_predictions_to_csv(predictions, filepaths, local_output_path)
 
-# Run your main script (replace 'your_main_script.py' with the actual script name)
-python3 your_main_script.py --bucket_name your_bucket_name --input_s3_prefix your_prefix --local_dir $DIRECTORY --model_path your_model_path
-
-# Check the exit status of your main script
-if [ $? -eq 0 ]; then
-  echo "Main script executed successfully."
-  # If files were found before running the main script, delete them
-  if [ "$FILE_EXISTS" = true ]; then
-    echo "Deleting files in $DIRECTORY."
-    rm -f $DIRECTORY/*
-    echo "Files deleted."
-  fi
-else
-  echo "Main script encountered an error."
-  exit 1
-fi
-
-# Optionally, you can include additional cleanup or logging here
-
-echo "Script execution completed."
-
+        # Upload the predictions CSV back to S3
+        upload_file_to_s3(local_output_path, bucket_name, output_s3_key)
+    except Exception as e:
+        print(f"Error during processing: {e}")
