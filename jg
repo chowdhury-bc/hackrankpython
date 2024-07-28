@@ -46,8 +46,9 @@ def generate_predictions(images, model, device):
     return outputs
 
 def append_predictions_to_csv(predictions, filepaths, local_output_path):
-    # Convert predictions to DataFrame
-    predictions_df = pd.DataFrame(predictions.numpy(), columns=['Prediction'])
+    # Convert list of tensors to NumPy arrays
+    predictions_numpy = [pred.numpy() for pred in predictions]
+    predictions_df = pd.DataFrame(predictions_numpy, columns=['Prediction'])
     predictions_df['Filepath'] = filepaths
     if os.path.exists(local_output_path):
         existing_df = pd.read_csv(local_output_path)
