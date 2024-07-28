@@ -1,26 +1,24 @@
+import os
+import boto3
 import argparse
-import pickle
-from statistics import median
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-from tqdm import tqdm
-from sortedcontainers import SortedList
 import torch
-import torch.nn as nn
-import torch.optim as optim
+import pandas as pd
 from torch.utils.data import DataLoader
-from torchvision.utils import save_image
+from tqdm import tqdm
 import timm
 from Datasets import Dataset
 from EfficientNet_model import EfficientNet
-import os
-import boto3
 
 # Initialize S3 client
 s3_client = boto3.client('s3')
 
+def ensure_directory_exists(file_path):
+    directory = os.path.dirname(file_path)
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+
 def download_file_from_s3(bucket_name, s3_key, local_path):
+    ensure_directory_exists(local_path)
     s3_client.download_file(bucket_name, s3_key, local_path)
 
 def upload_file_to_s3(local_path, bucket_name, s3_key):
@@ -87,8 +85,7 @@ if __name__ == '__main__':
     dataset_params = {
         'model_config': timm.data.resolve_model_data_config(model),
         'input_img_size': input_img_size,
-        # 'ROI': ((1046,569),(1920,1440))  # RayRobertsLake
-        'ROI': ((1067,417),(2393,1743))  # Pinewood
+        'ROI': ((1067,417),(2393,1743))  # Example ROI
     }
     inference_dataset = Dataset(image_files, **dataset_params, scaler=model.scaler, training=False)
     dataloader = DataLoader(inference_dataset, batch_size=batch_size, shuffle=False, pin_memory=True)
@@ -100,7 +97,6 @@ if __name__ == '__main__':
         outputs = generate_predictions(images, model, device)
         outputs = inference_dataset.reverse_scale(outputs)
 
-        # Store predictions and filepaths
         predictions.extend(outputs)
         filepaths.extend(inference_dataset.image_paths[i*batch_size:(i+1)*batch_size])
 
