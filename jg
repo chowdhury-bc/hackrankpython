@@ -49,3 +49,44 @@ if __name__ == '__main__':
     latest_file_key = get_latest_file_from_s3(bucket_name, prefix)
     local_image_path = download_file_from_s3(bucket_name, latest_file_key, local_dir)
     print(f"File downloaded to: {local_image_path}")
+
+
+
+
+
+
+#!/bin/bash
+
+# Directory to check for files
+DIRECTORY="/var/snap/amazon-ssm-agent/7993/imgfiles"
+
+# Check if any file exists in the directory
+if [ "$(ls -A $DIRECTORY)" ]; then
+  echo "Files found in $DIRECTORY. They will be deleted after running the script."
+  FILE_EXISTS=true
+else
+  echo "No files found in $DIRECTORY."
+  FILE_EXISTS=false
+fi
+
+# Run your main script (replace 'your_main_script.py' with the actual script name)
+python3 your_main_script.py --bucket_name your_bucket_name --input_s3_prefix your_prefix --local_dir $DIRECTORY --model_path your_model_path
+
+# Check the exit status of your main script
+if [ $? -eq 0 ]; then
+  echo "Main script executed successfully."
+  # If files were found before running the main script, delete them
+  if [ "$FILE_EXISTS" = true ]; then
+    echo "Deleting files in $DIRECTORY."
+    rm -f $DIRECTORY/*
+    echo "Files deleted."
+  fi
+else
+  echo "Main script encountered an error."
+  exit 1
+fi
+
+# Optionally, you can include additional cleanup or logging here
+
+echo "Script execution completed."
+
