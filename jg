@@ -1,0 +1,14 @@
+def ensure_directory_exists(file_path):
+    directory = os.path.dirname(file_path)
+    print(f"Ensuring directory exists for: {directory}")
+    if not os.path.exists(directory):
+        print(f"Directory does not exist. Creating directory: {directory}")
+        os.makedirs(directory)
+    else:
+        print(f"Directory already exists: {directory}")
+
+def download_file_from_s3(bucket_name, s3_key, local_path):
+    ensure_directory_exists(local_path)
+    print(f"Downloading file from S3: Bucket={bucket_name}, Key={s3_key}, LocalPath={local_path}")
+    s3_client.download_file(bucket_name, s3_key, local_path)
+    print(f"Downloaded file from S3 to {local_path}")
