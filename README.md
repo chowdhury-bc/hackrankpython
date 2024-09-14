@@ -1,26 +1,25 @@
 {
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Sid": "AllowPutBucketPolicy",
-            "Effect": "Allow",
-            "Principal": {
-                "AWS": "arn:aws:iam::your-account-id:role/developers-pcluster-deploy-role"
-            },
-            "Action": "s3:PutBucketPolicy",
-            "Resource": "arn:aws:s3:::your-bucket-name"
-        }
-    ]
+  "Version": "2012-10-17",
+  "Id": "PolicyForDevelopersPClusterDeployRole",
+  "Statement": [
+    {
+      "Sid": "AllowS3ActionsForSpecificRole",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::123456789012:role/developers-pcluster-deploy-role"
+      },
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject",
+        "s3:DeleteObject",
+        "s3:ListBucket",
+        "s3:GetBucketLocation"
+      ],
+      "Resource": [
+        "arn:aws:s3:::my-pcluster-bucket",
+        "arn:aws:s3:::my-pcluster-bucket/*"
+      ]
+    }
+  ]
 }
 
-{
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Sid": "AllowPutBucketPolicy",
-            "Effect": "Allow",
-            "Action": "s3:PutBucketPolicy",
-            "Resource": "arn:aws:s3:::your-bucket-name"
-        }
-    ]
-}
